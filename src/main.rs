@@ -263,7 +263,7 @@ impl Parser {
 
     fn advance(&mut self) {
         self.current = self.lexer.next_token();
-        debug!("Advanced to token {:?}", self.current);
+        //debug!("Advanced to token {:?}", self.current);
     }
 
     fn parse(&mut self) -> Result<Vec<Statement>, String> {
