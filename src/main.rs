@@ -269,7 +269,7 @@ impl Parser {
     fn parse(&mut self) -> Result<Vec<Statement>, String> {
         let mut statements = Vec::new();
         while self.current != Token::Eof {
-            debug!("Parsing statement, current token: {:?}", self.current);
+            //debug!("Parsing statement, current token: {:?}", self.current);
             let stmt = match self.current.clone() {
                 Token::Keyword(k) if k == "print" => self.parse_print_statement(),
                 Token::Keyword(k) if k == "fn" => self.parse_fn_statement(),
@@ -326,7 +326,7 @@ impl Parser {
     }
 
     fn parse_if_statement(&mut self) -> Result<Statement, String> {
-        debug!("Parsing if statement");
+        //debug!("Parsing if statement");
         self.advance(); // consume 'if'
 
         if self.current != Token::Op('(') {
@@ -351,7 +351,7 @@ impl Parser {
 
         if let Token::Keyword(k) = self.current.clone() {
             if k == "else" {
-                debug!("Found 'else' keyword");
+                //debug!("Found 'else' keyword");
                 self.advance(); // consume 'else'
                 
                 if self.current != Token::Op('[') {
@@ -387,7 +387,7 @@ impl Parser {
     }
 
     fn parse_print_statement(&mut self) -> Result<Statement, String> {
-        debug!("Parsing print statement");
+        //debug!("Parsing print statement");
         self.advance(); // Consume 'print'
         if self.current != Token::Op('(') {
             return Err(format!("Expected '(' after 'print', found {:?}", self.current));
@@ -403,13 +403,13 @@ impl Parser {
 
             while self.current == Token::Op(',') {
                 self.advance();
-                debug!("Parsing print argument (formatted), current token: {:?}", self.current);
+                //debug!("Parsing print argument (formatted), current token: {:?}", self.current);
                 let expr = self.expr_bp(0)?;
                 expressions.push(expr);
             }
 
         } else if self.current != Token::Op(')') {
-            debug!("Parsing print argument (simple), current token: {:?}", self.current);
+            //debug!("Parsing print argument (simple), current token: {:?}", self.current);
             let expr = self.expr_bp(0)?;
             expressions.push(expr);
 
@@ -427,7 +427,7 @@ impl Parser {
     }
 
     fn parse_fn_statement(&mut self) -> Result<Statement, String> {
-        debug!("Parsing fn statement");
+        //debug!("Parsing fn statement");
         self.advance();
         let fn_name = match self.current.clone() {
             Token::Ident(id) => {
@@ -493,7 +493,7 @@ impl Parser {
     }
 
     fn expr_bp(&mut self, min_bp: u8) -> Result<Expr, String> {
-        debug!("Parsing expression with min_bp {}, current token: {:?}", min_bp, self.current);
+        //debug!("Parsing expression with min_bp {}, current token: {:?}", min_bp, self.current);
         let mut lhs = match self.current.clone() {
             // Store the raw number string
             Token::Number(num_str) => {
@@ -545,7 +545,7 @@ impl Parser {
                     break;
                 }
                 self.advance();
-                debug!("Parsing infix/cmp op {}, right expr with bp {}", op, r_bp);
+                //debug!("Parsing infix/cmp op {}, right expr with bp {}", op, r_bp);
                 let rhs = self.expr_bp(r_bp)?;
                 
                 lhs = if is_cmp {
@@ -558,7 +558,7 @@ impl Parser {
             }
             break;
         }
-        debug!("Parsed expression: {:?}", lhs);
+        //debug!("Parsed expression: {:?}", lhs);
         Ok(lhs)
     }
 }
@@ -614,7 +614,7 @@ fn execute_block_body(raw_body: &str, env: &mut Environment, func_defs: &FuncDef
                 Ok(flow) => {
                     match flow {
                         FunctionControlFlow::Return(val) => {
-                            debug!("Explicit return triggered from block with value: {:?}", val);
+                            //debug!("Explicit return triggered from block with value: {:?}", val);
                             return Ok(Some(val));
                         }
                         FunctionControlFlow::Continue(val) => {
@@ -655,7 +655,7 @@ fn execute_block_body(raw_body: &str, env: &mut Environment, func_defs: &FuncDef
 
 
 fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Value, String> {
-    debug!("Evaluating expr: {:?}", expr);
+    //debug!("Evaluating expr: {:?}", expr);
     match expr {
         // Logic to determine Integer vs Float from the original string
         Expr::Num(s) => {
@@ -826,7 +826,7 @@ fn execute_function(fn_name: &str, arg_exprs: &[Expr], caller_env: &mut Environm
         .iter()
         .map(|e| {
             let result = eval(e, caller_env, func_defs);
-            debug!("Evaluated arg {:?} -> {:?}", e, result);
+            //debug!("Evaluated arg {:?} -> {:?}", e, result);
             result
         })
         .collect::<Result<Vec<Value>, String>>()?;
@@ -834,7 +834,7 @@ fn execute_function(fn_name: &str, arg_exprs: &[Expr], caller_env: &mut Environm
     for (param_name, arg_value) in params.iter().zip(evaluated_args.into_iter()) {
         local_env.insert(param_name.clone(), arg_value);
     }
-    debug!("Local env for '{}': {:?}", fn_name, local_env);
+    //debug!("Local env for '{}': {:?}", fn_name, local_env);
 
     match execute_block_body(raw_body, &mut local_env, func_defs, true) {
         Ok(Some(val)) => Ok(val), 
