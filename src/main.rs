@@ -78,13 +78,15 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)] // Added Clone to Statement for use in the interpreter
 enum Statement {
     Expr(Expr),
     Print(Option<String>, Vec<Expr>),
-    Def(String, Vec<String>, String),
+    // CHANGE: Function body now Vec<Statement>
+    Def(String, Vec<String>, Vec<Statement>),
     Return(Option<Expr>),
-    If(Expr, String, Option<String>),
+    // CHANGE: If and Else bodies now Vec<Statement>
+    If(Expr, Vec<Statement>, Option<Vec<Statement>>),
 }
 
 // --- Lexer and Token Definitions ---
@@ -308,42 +310,40 @@ impl Parser {
         Ok(statements)
     }
 
-    fn parse_block_body(&mut self) -> Result<String, String> {
-        let start_pos_in_input = self.lexer.pos - 1; 
-        self.advance(); 
+    // CHANGE: parse_block_body now returns Vec<Statement> and directly parses tokens
+    fn parse_block_body(&mut self) -> Result<Vec<Statement>, String> {
+        // The calling function (parse_fn, parse_if) must ensure self.current is the token *after* '['
+        let mut statements = Vec::new();
 
-        let input = &self.lexer.input;
-        let mut end_pos_in_input = self.lexer.pos;
-        let mut bracket_count = 1;
-        
-        while end_pos_in_input < input.len() {
-            match input[end_pos_in_input] {
-                '[' => bracket_count += 1,
-                ']' => {
-                    bracket_count -= 1;
-                    if bracket_count == 0 {
-                        break;
-                    }
+        // Loop until ']' or EOF
+        while self.current != Token::Op(']') && self.current != Token::Eof {
+            let stmt = match self.current.clone() {
+                // Include all recognized statement types (except 'fn', which should only be top-level)
+                Token::Keyword(k) if k == "print" => self.parse_print_statement(),
+                Token::Keyword(k) if k == "return" => self.parse_return_statement(),
+                Token::Keyword(k) if k == "if" => self.parse_if_statement(),
+                // Ensure proper error handling for deprecated/misplaced keywords
+                Token::Keyword(k) if k == "def" => return Err(format!("The 'def' keyword is deprecated.")),
+                Token::Keyword(k) if k == "else" => return Err(format!("The 'else' keyword must immediately follow a closing ']' of an 'if' block.")),
+                Token::Op(op) if op == '=' => {
+                    return Err("The assignment operator '=' cannot start a statement.".to_string());
                 }
-                _ => {}
-            }
-            end_pos_in_input += 1;
+                // Default: parse as an expression statement
+                _ => {
+                    let expr = self.expr_bp(0)?;
+                    Ok(Statement::Expr(expr))
+                }
+            }?;
+            statements.push(stmt);
         }
         
-        if bracket_count != 0 || end_pos_in_input == input.len() {
-            return Err("Unclosed block body. Expected matching ']'".to_string());
-        }
-
-        let raw_body: String = input[start_pos_in_input..=end_pos_in_input].iter().collect();
-        
-        self.lexer.pos = end_pos_in_input;
-        self.advance(); 
         if self.current != Token::Op(']') {
-             return Err(format!("Expected closing ']' after block body scan, found {:?}", self.current));
+            return Err(format!("Unclosed block body. Expected matching ']', found {:?}", self.current));
         }
-        self.advance(); 
 
-        Ok(raw_body)
+        self.advance(); // consume the closing ']'
+        
+        Ok(statements)
     }
 
     fn parse_if_statement(&mut self) -> Result<Statement, String> {
@@ -366,9 +366,11 @@ impl Parser {
             return Err(format!("Expected '[' to start if body, found {:?}", self.current));
         }
         
-        let if_body = self.parse_block_body()?;
+        self.advance(); // CRITICAL: Consume the opening '['
+        // CHANGE: if_body is now Vec<Statement>
+        let if_body_statements = self.parse_block_body()?;
 
-        let mut else_body: Option<String> = None;
+        let mut else_body_statements: Option<Vec<Statement>> = None;
 
         if let Token::Keyword(k) = self.current.clone() {
             if k == "else" {
@@ -379,12 +381,15 @@ impl Parser {
                     return Err(format!("Expected '[' to start else body, found {:?}", self.current));
                 }
                 
-                else_body = Some(self.parse_block_body()?);
+                self.advance(); // CRITICAL: Consume the opening '['
+                // CHANGE: else_body is now Vec<Statement>
+                else_body_statements = Some(self.parse_block_body()?);
             }
         }
         
-        debug!("Parsed if statement with condition {:?}, if body {}, and else body {:?}", condition, if_body, else_body);
-        Ok(Statement::If(condition, if_body, else_body))
+        debug!("Parsed if statement with condition {:?}, if body {:?}, and else body {:?}", condition, if_body_statements, else_body_statements);
+        // CHANGE: Store the Vec<Statement>
+        Ok(Statement::If(condition, if_body_statements, else_body_statements))
     }
 
     fn parse_return_statement(&mut self) -> Result<Statement, String> {
@@ -485,10 +490,14 @@ impl Parser {
         if self.current != Token::Op('[') {
             return Err(format!("Expected '[' to start function body (e.g., fn {}() [body]), found {:?}", fn_name, self.current));
         }
-        let raw_body = self.parse_block_body()?;
         
-        debug!("Parsed fn {}({:?}) [{}]", fn_name, params, raw_body);
-        Ok(Statement::Def(fn_name, params, raw_body))
+        self.advance(); // CRITICAL: Consume the opening '['
+        // CHANGE: raw_body is now a Vec<Statement>
+        let body_statements = self.parse_block_body()?;
+        
+        debug!("Parsed fn {}({:?}) [{:?}]", fn_name, params, body_statements);
+        // CHANGE: Store the Vec<Statement>
+        Ok(Statement::Def(fn_name, params, body_statements))
     }
 
     fn parse_arguments(&mut self) -> Result<Vec<Expr>, String> {
@@ -639,7 +648,8 @@ fn binding_power(op: &str) -> Option<(u8, u8, bool)> { // (l_bp, r_bp, is_compar
 // --- Interpreter ---
 
 type Environment = HashMap<String, Value>;
-type FuncDefs = HashMap<String, (Vec<String>, String)>;
+// CHANGE: Function definition now stores Vec<Statement>
+type FuncDefs = HashMap<String, (Vec<String>, Vec<Statement>)>;
 
 enum FunctionControlFlow {
     Continue(Value), 
@@ -647,68 +657,7 @@ enum FunctionControlFlow {
     Print(String),   
 }
 
-/// Executes a raw block body string by parsing it and running the statements.
-fn execute_block_body(raw_body: &str, env: &mut Environment, func_defs: &FuncDefs, is_in_function: bool) -> Result<Option<Value>, String> {
-    let sanitized_body = raw_body
-        .replace('\u{a0}', " ")
-        .replace('\u{200b}', "")
-        .trim_matches(|c: char| c == '[' || c == ']' || c.is_whitespace())
-        .to_string();
-
-    if sanitized_body.is_empty() {
-        return Ok(None);
-    }
-
-    let mut body_parser = Parser::new(&sanitized_body);
-    let statements = body_parser.parse()?;
-    
-    let mut last_value = Value::Void;
-
-    for (i, stmt) in statements.into_iter().enumerate() {
-        if is_in_function {
-            match run_statement_in_function(&stmt, env, func_defs) {
-                Ok(flow) => {
-                    match flow {
-                        FunctionControlFlow::Return(val) => {
-                            //debug!("Explicit return triggered from block with value: {:?}", val);
-                            return Ok(Some(val));
-                        }
-                        FunctionControlFlow::Continue(val) => {
-                            last_value = val;
-                        }
-                        FunctionControlFlow::Print(output) => {
-                            writeln!(io::stdout(), "{}", output).map_err(|e| format!("Failed to write to stdout: {}", e))?;
-                            io::stdout().flush().map_err(|e| format!("Failed to flush stdout: {}", e))?;
-                            let mut log_file = OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("runlog")
-                                .map_err(|e| format!("Failed to open runlog: {}", e))?;
-                            writeln!(log_file, "Block Output (Stmt {}): {}", i + 1, output)
-                                .map_err(|e| format!("Failed to write to runlog: {}", e))?;
-                            log_file.flush().map_err(|e| format!("Failed to flush runlog: {}", e))?;
-                        }
-                    }
-                }
-                Err(e) => {
-                    return Err(format!("Block Execution Error (Stmt {}): {}", i + 1, e));
-                }
-            }
-        } else { // Top-level execution (no return flow needed)
-             match run_statement(&stmt, env, &mut func_defs.clone()) {
-                Ok(_) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-    
-    if is_in_function {
-        Ok(Some(last_value))
-    } else {
-        Ok(None)
-    }
-}
-
+// REMOVED: execute_block_body function is no longer needed.
 
 fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Value, String> {
     //debug!("Evaluating expr: {:?}", expr);
@@ -910,16 +859,21 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
     }
 }
 
+// CHANGE: function now uses Vec<Statement>
 fn execute_function(fn_name: &str, arg_exprs: &[Expr], caller_env: &mut Environment, func_defs: &FuncDefs) -> Result<Value, String> {
     debug!("Executing function '{}', args: {:?}", fn_name, arg_exprs);
-    let (params, raw_body) = func_defs.get(fn_name)
+    
+    // CHANGE: Retrieve Vec<Statement>
+    let (params, body_statements) = func_defs.get(fn_name)
         .ok_or_else(|| format!("Function '{}' is not defined", fn_name))?;
+        
     if params.len() != arg_exprs.len() {
         return Err(format!(
             "Function '{}' expects {} arguments, but received {}",
             fn_name, params.len(), arg_exprs.len()
         ));
     }
+    
     let evaluated_args: Vec<Value> = arg_exprs
         .iter()
         .map(|e| {
@@ -928,17 +882,50 @@ fn execute_function(fn_name: &str, arg_exprs: &[Expr], caller_env: &mut Environm
             result
         })
         .collect::<Result<Vec<Value>, String>>()?;
+    
     let mut local_env = Environment::new();
     for (param_name, arg_value) in params.iter().zip(evaluated_args.into_iter()) {
         local_env.insert(param_name.clone(), arg_value);
     }
     //debug!("Local env for '{}': {:?}", fn_name, local_env);
 
-    match execute_block_body(raw_body, &mut local_env, func_defs, true) {
-        Ok(Some(val)) => Ok(val), 
-        Ok(None) => Ok(Value::Void), 
-        Err(e) => Err(format!("Function '{}' Execution Error: {}", fn_name, e)),
+    let mut last_value = Value::Void;
+
+    // CHANGE: Loop through the pre-parsed statements directly
+    for (i, stmt) in body_statements.iter().enumerate() {
+        match run_statement_in_function(stmt, &mut local_env, func_defs) {
+            Ok(flow) => {
+                match flow {
+                    FunctionControlFlow::Return(val) => {
+                        // Explicit return
+                        //debug!("Explicit return triggered from block with value: {:?}", val);
+                        return Ok(val);
+                    }
+                    FunctionControlFlow::Continue(val) => {
+                        last_value = val;
+                    }
+                    FunctionControlFlow::Print(output) => {
+                        writeln!(io::stdout(), "{}", output).map_err(|e| format!("Failed to write to stdout: {}", e))?;
+                        io::stdout().flush().map_err(|e| format!("Failed to flush stdout: {}", e))?;
+                        let mut log_file = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("runlog")
+                            .map_err(|e| format!("Failed to open runlog: {}", e))?;
+                        writeln!(log_file, "Block Output (Stmt {}): {}", i + 1, output)
+                            .map_err(|e| format!("Failed to write to runlog: {}", e))?;
+                        log_file.flush().map_err(|e| format!("Failed to flush runlog: {}", e))?;
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(format!("Function '{}' Execution Error (Stmt {}): {}", fn_name, i + 1, e));
+            }
+        }
     }
+    
+    // Implicit return of the last expression value or Void
+    Ok(last_value)
 }
 
 fn run_statement_in_function(stmt: &Statement, env: &mut Environment, func_defs: &FuncDefs) -> Result<FunctionControlFlow, String> {
@@ -990,7 +977,8 @@ fn run_statement_in_function(stmt: &Statement, env: &mut Environment, func_defs:
             
             Ok(FunctionControlFlow::Print(output))
         }
-        Statement::If(condition_expr, if_raw_body, else_raw_body) => {
+        // CHANGE: Uses Vec<Statement> for bodies
+        Statement::If(condition_expr, if_statements, else_opt_statements) => {
             let condition_val = eval(condition_expr, env, func_defs)?;
 
             let execute_if = match condition_val {
@@ -999,21 +987,48 @@ fn run_statement_in_function(stmt: &Statement, env: &mut Environment, func_defs:
             };
 
             let body_to_execute = if execute_if {
-                if_raw_body
-            } else if let Some(else_body) = else_raw_body {
-                else_body
+                Some(if_statements)
+            } else if let Some(else_statements) = else_opt_statements {
+                Some(else_statements)
             } else {
                 return Ok(FunctionControlFlow::Continue(Value::Void)); 
             };
             
-            // Recurse execution into the block body
-            match execute_block_body(body_to_execute, env, func_defs, true) {
-                // If the inner block returns a value, we return it up the function chain
-                Ok(Some(val)) => Ok(FunctionControlFlow::Return(val)),
-                // If the inner block returns nothing, we just continue the current function execution
-                Ok(None) => Ok(FunctionControlFlow::Continue(Value::Void)),
-                Err(e) => Err(e),
+            let mut last_value = Value::Void;
+            
+            // Loop through the statements in the block
+            if let Some(statements) = body_to_execute {
+                for stmt in statements.iter() {
+                    match run_statement_in_function(stmt, env, func_defs) {
+                        Ok(flow) => {
+                            match flow {
+                                FunctionControlFlow::Return(val) => {
+                                    // Propagate return flow up the call stack
+                                    return Ok(FunctionControlFlow::Return(val)); 
+                                }
+                                FunctionControlFlow::Continue(val) => {
+                                    last_value = val;
+                                }
+                                FunctionControlFlow::Print(output) => {
+                                    writeln!(io::stdout(), "{}", output).map_err(|e| format!("Failed to write to stdout: {}", e))?;
+                                    io::stdout().flush().map_err(|e| format!("Failed to flush stdout: {}", e))?;
+                                    let mut log_file = OpenOptions::new()
+                                        .create(true)
+                                        .append(true)
+                                        .open("runlog")
+                                        .map_err(|e| format!("Failed to open runlog: {}", e))?;
+                                    writeln!(log_file, "Block Output: {}", output)
+                                        .map_err(|e| format!("Failed to write to runlog: {}", e))?;
+                                    log_file.flush().map_err(|e| format!("Failed to flush runlog: {}", e))?;
+                                }
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
+            
+            Ok(FunctionControlFlow::Continue(last_value))
         }
         Statement::Def(name, ..) => {
             Err(format!("Function definition '{}' is only allowed at the top level", name))
@@ -1091,14 +1106,16 @@ fn run_statement(stmt: &Statement, env: &mut Environment, func_defs: &mut FuncDe
             log_file.flush().map_err(|e| format!("Failed to flush runlog: {}", e))?;
             Ok(output)
         }
-        Statement::Def(name, params, raw_body) => {
-            func_defs.insert(name.clone(), (params.clone(), raw_body.clone()));
+        // CHANGE: Store Vec<Statement> directly in FuncDefs
+        Statement::Def(name, params, body_statements) => {
+            func_defs.insert(name.clone(), (params.clone(), body_statements.clone()));
             Ok(String::new())
         }
         Statement::Return(_) => {
             Ok(String::new())
         }
-        Statement::If(condition_expr, if_raw_body, else_raw_body) => {
+        // CHANGE: Execute pre-parsed Vec<Statement>
+        Statement::If(condition_expr, if_statements, else_opt_statements) => {
             let condition_val = eval(condition_expr, env, func_defs)?;
 
             let execute_if = match condition_val {
@@ -1107,17 +1124,24 @@ fn run_statement(stmt: &Statement, env: &mut Environment, func_defs: &mut FuncDe
             };
 
             let body_to_execute = if execute_if {
-                if_raw_body
-            } else if let Some(else_body) = else_raw_body {
-                else_body
+                Some(if_statements)
+            } else if let Some(else_statements) = else_opt_statements {
+                Some(else_statements)
             } else {
                 return Ok(String::new()); 
             };
             
-            match execute_block_body(body_to_execute, env, func_defs, false) {
-                Ok(_) => Ok(String::new()),
-                Err(e) => Err(e),
+            // Loop through the statements in the block
+            if let Some(statements) = body_to_execute {
+                for stmt in statements.iter() {
+                    match run_statement(stmt, env, func_defs) {
+                        Ok(_) => continue,
+                        Err(e) => return Err(e),
+                    }
+                }
             }
+            
+            Ok(String::new())
         }
     }
 }
