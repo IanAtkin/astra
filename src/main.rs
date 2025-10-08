@@ -52,6 +52,8 @@ enum Expr {
     Prefix(char, Box<Expr>),
     Infix(Box<Expr>, char, Box<Expr>),
     Cmp(Box<Expr>, String, Box<Expr>), 
+    // ADDED: Logic variant for 'and' and 'or'
+    Logic(Box<Expr>, String, Box<Expr>),
     Call(String, Vec<Expr>),
 }
 
@@ -64,6 +66,8 @@ impl fmt::Display for Expr {
             Expr::Prefix(op, expr) => write!(f, "({} {})", op, expr),
             Expr::Infix(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Expr::Cmp(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs), 
+            // ADDED: Logic display
+            Expr::Logic(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Expr::Call(name, args) => {
                 write!(f, "{}(", name)?;
                 for (i, arg) in args.iter().enumerate() {
@@ -190,7 +194,8 @@ impl Lexer {
                     break;
                 }
             }
-            if ident == "print" || ident == "def" || ident == "fn" || ident == "return" || ident == "if" || ident == "else" {
+            // MODIFIED: Added 'and' and 'or' as keywords
+            if ident == "print" || ident == "def" || ident == "fn" || ident == "return" || ident == "if" || ident == "else" || ident == "and" || ident == "or" {
                 Token::Keyword(ident)
             } else {
                 Token::Ident(ident)
@@ -564,11 +569,24 @@ impl Parser {
         loop {
             let op_token = self.current.clone();
             
-            let op_str = match op_token {
-                Token::Op(op) => op.to_string(),
-                Token::Cmp(op) => op,
-                Token::Eof => break,
-                _ => break,
+            // Check for logical keywords as operators
+            let is_logic_op = match op_token {
+                Token::Keyword(ref k) if k == "and" || k == "or" => true,
+                _ => false,
+            };
+
+            let op_str = if is_logic_op {
+                match op_token {
+                    Token::Keyword(k) => k,
+                    _ => unreachable!(),
+                }
+            } else {
+                match op_token {
+                    Token::Op(op) => op.to_string(),
+                    Token::Cmp(op) => op,
+                    Token::Eof => break,
+                    _ => break,
+                }
             };
 
             // 1. Check for Compound Assignment (e.g., +=, -=) - MUST be desugared here
@@ -601,19 +619,23 @@ impl Parser {
                 continue;
             }
 
-            // 2. Check for simple assignment, comparison, or standard infix operators
+            // 2. Check for simple assignment, comparison, standard infix operators OR LOGIC OPS
             if let Some((l_bp, r_bp, is_cmp)) = binding_power(op_str.as_str()) {
                 if l_bp < min_bp {
                     break;
                 }
                 self.advance();
-                //debug!("Parsing infix/cmp op {}, right expr with bp {}", op_str, r_bp);
+                //debug!("Parsing infix/cmp/logic op {}, right expr with bp {}", op_str, r_bp);
                 let rhs = self.expr_bp(r_bp)?;
                 
                 lhs = if is_cmp {
                     // Cmp covers ==, !=, <, >, <=, >=, ===, !==
                     Expr::Cmp(Box::new(lhs), op_str, Box::new(rhs))
-                } else {
+                } else if is_logic_op {
+                    // NEW: Logic covers "and" and "or"
+                    Expr::Logic(Box::new(lhs), op_str, Box::new(rhs))
+                }
+                 else {
                     // Infix covers simple assignment (=) and standard arithmetic (+, -, *, /, %, ^)
                     let single_char_op = op_str.chars().next().unwrap(); 
                     Expr::Infix(Box::new(lhs), single_char_op, Box::new(rhs))
@@ -634,13 +656,17 @@ fn prefix_binding_power(op: char) -> ((), u8) {
     }
 }
 
+// MODIFIED binding_power to introduce 'or' and 'and', and raise precedence of Cmp
 fn binding_power(op: &str) -> Option<(u8, u8, bool)> { // (l_bp, r_bp, is_comparison)
     match op {
         "=" => Some((2, 1, false)), // Simple Assignment
-        "==" | "!=" | "<" | ">" | "<=" | ">=" | "===" | "!==" => Some((3, 4, true)), // Comparison
-        "+" | "-" => Some((5, 6, false)), // Addition/Subtraction
-        "*" | "/" | "%" => Some((7, 8, false)), // Multiplication/Division/Modulo
-        "^" => Some((9, 10, false)), // Exponentiation (Higher precedence)
+        "or" => Some((3, 4, false)), // Logical OR (Lowest precedence)
+        "and" => Some((5, 6, false)), // Logical AND
+        // Comparison (Raised to 7/8 to be higher than AND/OR)
+        "==" | "!=" | "<" | ">" | "<=" | ">=" | "===" | "!==" => Some((7, 8, true)), 
+        "+" | "-" => Some((9, 10, false)), // Addition/Subtraction
+        "*" | "/" | "%" => Some((11, 12, false)), // Multiplication/Division/Modulo
+        "^" => Some((13, 14, false)), // Exponentiation (Highest precedence)
         _ => None,
     }
 }
@@ -855,6 +881,38 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
             };
             
             Ok(Value::Boolean(result))
+        }
+
+        // NEW: Logical Operators (AND, OR)
+        Expr::Logic(lhs, op, rhs) => {
+            let left_val = eval(lhs, env, func_defs)?;
+
+            // Short-circuit evaluation
+            let short_circuit_val = match (op.as_str(), &left_val) {
+                // False AND anything is False
+                ("and", Value::Boolean(false)) => Some(Value::Boolean(false)), 
+                // True OR anything is True
+                ("or", Value::Boolean(true)) => Some(Value::Boolean(true)),   
+                _ => None,
+            };
+
+            if let Some(val) = short_circuit_val {
+                return Ok(val);
+            }
+            
+            // If not short-circuited, evaluate RHS
+            let right_val = eval(rhs, env, func_defs)?;
+
+            match (op.as_str(), left_val, right_val) {
+                // Since we passed short-circuiting, the left must be a Boolean as well
+                ("and", Value::Boolean(l_b), Value::Boolean(r_b)) => Ok(Value::Boolean(l_b && r_b)),
+                ("or", Value::Boolean(l_b), Value::Boolean(r_b)) => Ok(Value::Boolean(l_b || r_b)),
+                
+                // Error on incompatible types (if one wasn't a boolean, or if the left was a boolean but the right wasn't)
+                (op_str, l, r) => {
+                    Err(format!("Logical operator '{}' only works on Booleans. Found {:?} and {:?}", op_str, l, r))
+                }
+            }
         }
     }
 }
