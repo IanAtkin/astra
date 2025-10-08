@@ -1,0 +1,12 @@
+fn loop_fn(i) [
+    if (i < 10) [
+        print("i is now {}", i)
+        i = i + 1
+        loop_fn(i)
+    ]
+]
+
+i = 0 ; Initialize loop variable
+loop_fn(i) ; Start the loop
+
+print("After the loop, i is {}", i) ; This will print 0, because i in the main scope wasn't changed by loop_fn
