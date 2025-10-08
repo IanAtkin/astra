@@ -21,6 +21,7 @@ enum Value {
     Float(f64),
     String(String),
     Boolean(bool), 
+    Array(Vec<Value>), // <--- MODIFIED: Added Array type
     Void,
 }
 
@@ -40,6 +41,23 @@ impl fmt::Display for Value {
             Value::String(s) => write!(f, "\"{}\"", s), 
             Value::Boolean(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Void => write!(f, "void"),
+            // MODIFIED: Display for Array
+            Value::Array(v) => {
+                write!(f, "[")?;
+                for (i, val) in v.iter().enumerate() {
+                    // Array elements are displayed without quotes for strings here, 
+                    // which is a stylistic choice for compact output.
+                    match val {
+                        Value::String(s) => write!(f, "{}", s)?,
+                        _ => write!(f, "{}", val)?,
+                    }
+                    
+                    if i < v.len() - 1 {
+                        write!(f, ", ")?;
+                    }
+                }
+                write!(f, "]")
+            }
         }
     }
 }
@@ -54,6 +72,9 @@ enum Expr {
     Cmp(Box<Expr>, String, Box<Expr>), 
     // ADDED: Logic variant for 'and' and 'or'
     Logic(Box<Expr>, String, Box<Expr>),
+    Array(Vec<Expr>), // <--- MODIFIED: Array Literal (e.g., [1, 2, 3])
+    // MODIFIED: Slice variant for both indexing (arr[i]) and slicing (arr[i:j])
+    Slice(Box<Expr>, Option<Box<Expr>>, Option<Box<Expr>>), // (array_expr, start_expr_opt, end_expr_opt)
     Call(String, Vec<Expr>),
 }
 
@@ -68,6 +89,31 @@ impl fmt::Display for Expr {
             Expr::Cmp(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs), 
             // ADDED: Logic display
             Expr::Logic(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
+            // MODIFIED: Array display
+            Expr::Array(elements) => {
+                write!(f, "[")?;
+                for (i, expr) in elements.iter().enumerate() {
+                    write!(f, "{}", expr)?;
+                    if i < elements.len() - 1 {
+                        write!(f, ", ")?;
+                    }
+                }
+                write!(f, "]")
+            }
+            // MODIFIED: Slice/Index display
+            Expr::Slice(array, start, end) => {
+                write!(f, "{}[", array)?;
+                if let Some(s) = start {
+                    write!(f, "{}", s)?;
+                }
+                if start.is_some() || end.is_some() {
+                    write!(f, ":")?;
+                }
+                if let Some(e) = end {
+                    write!(f, "{}", e)?;
+                }
+                write!(f, "]")
+            }
             Expr::Call(name, args) => {
                 write!(f, "{}(", name)?;
                 for (i, arg) in args.iter().enumerate() {
@@ -402,7 +448,7 @@ impl Parser {
         self.advance(); // consume 'return' keyword
 
         let has_expr = match self.current {
-            Token::Number(_) | Token::StringLiteral(_) | Token::Op('(') | Token::Ident(_) | Token::Op('+') | Token::Op('-') => true,
+            Token::Number(_) | Token::StringLiteral(_) | Token::Op('(') | Token::Op('[') | Token::Ident(_) | Token::Op('+') | Token::Op('-') => true, // ADDED Token::Op('[') for array literal
             _ => false,
         };
 
@@ -558,6 +604,33 @@ impl Parser {
                 self.advance();
                 expr
             }
+            // MODIFIED: Array Literal parsing integrated as a prefix expression
+            Token::Op('[') => {
+                self.advance(); // consume '['
+                let mut elements = Vec::new();
+
+                if self.current == Token::Op(']') {
+                    self.advance(); // consume ']' for empty array
+                    return Ok(Expr::Array(elements));
+                }
+
+                loop {
+                    let expr = self.expr_bp(0)?;
+                    elements.push(expr);
+
+                    if self.current == Token::Op(']') {
+                        self.advance(); // consume ']'
+                        break;
+                    } else if self.current == Token::Op(',') {
+                        self.advance(); // consume ','
+                    } else {
+                        return Err(format!("Expected ',' or ']' in array literal, found {:?}", self.current));
+                    }
+                }
+                Expr::Array(elements)
+            }
+            // END MODIFIED
+            
             Token::Op(op) if op == '+' || op == '-' => {
                 self.advance();
                 let (_, r_bp) = prefix_binding_power(op);
@@ -566,8 +639,58 @@ impl Parser {
             }
             t => return Err(format!("Bad token in prefix: {:?} (Expected expression start or operator)", t)),
         };
+        
         loop {
             let op_token = self.current.clone();
+            
+            // MODIFIED: Check for Array Indexing and Slicing (highest precedence, 15/16)
+            if op_token == Token::Op('[') {
+                if 15 < min_bp {
+                    break;
+                }
+                self.advance(); // consume '['
+                
+                // Parse the start expression (optional: [expr:...)
+                let mut start_expr: Option<Expr> = None;
+                if self.current != Token::Op(':') && self.current != Token::Op(']') {
+                    start_expr = Some(self.expr_bp(0)?);
+                }
+
+                if self.current == Token::Op(':') {
+                    // Slicing: arr[start:end] or arr[:end] or arr[start:]
+                    self.advance(); // consume ':'
+                    
+                    // Parse the end expression (optional: ...:expr])
+                    let mut end_expr: Option<Expr> = None;
+                    if self.current != Token::Op(']') {
+                        end_expr = Some(self.expr_bp(0)?);
+                    }
+                    
+                    if self.current != Token::Op(']') {
+                        return Err(format!("Expected ']' after slice expression, found {:?}", self.current));
+                    }
+                    self.advance(); // consume ']'
+                    
+                    // Overwrite lhs with the Slice expression (arr[start:end])
+                    lhs = Expr::Slice(Box::new(lhs), start_expr.map(Box::new), end_expr.map(Box::new));
+                    continue;
+
+                } else if self.current == Token::Op(']') {
+                    // Indexing: arr[index] (where index is the sole expression)
+                    self.advance(); // consume ']'
+                    
+                    let index_expr = start_expr
+                        .ok_or_else(|| "Array index expression missing for simple indexing".to_string())?;
+
+                    // Simple indexing is represented as a slice with only the start expression set
+                    lhs = Expr::Slice(Box::new(lhs), Some(Box::new(index_expr)), None); 
+                    continue;
+
+                } else {
+                    return Err(format!("Expected ':' or ']' inside array access, found {:?}", self.current));
+                }
+            }
+            // END MODIFIED
             
             // Check for logical keywords as operators
             let is_logic_op = match op_token {
@@ -603,19 +726,20 @@ impl Parser {
                 // The right hand side of the assignment
                 let rhs = self.expr_bp(1)?; // Right binding power of assignment is 1
 
-                // Left-hand side must be a variable
-                let var_id = match lhs {
-                    Expr::Var(ref id) => Expr::Var(id.clone()), // Clone the Var(id) for both LHS and RHS of new Infix
-                    _ => return Err(format!("Left-hand side of compound assignment '{}' must be a variable", op_str)),
+                // Left-hand side must be a variable OR a slice/index expression
+                let assign_target = match &lhs {
+                    Expr::Var(id) => Expr::Var(id.clone()), // Clone the Var(id) for both LHS and RHS of new Infix
+                    Expr::Slice(arr, start, end) => Expr::Slice(arr.clone(), start.clone(), end.clone()),
+                    _ => return Err(format!("Left-hand side of compound assignment '{}' must be a variable or array index", op_str)),
                 };
-
+                
                 // Desugar: x += 5  -->  x = (x + 5)
                 // 1a. Create the arithmetic expression: (x + 5)
-                let arithmetic_expr = Expr::Infix(Box::new(var_id.clone()), actual_op, Box::new(rhs));
+                let arithmetic_expr = Expr::Infix(Box::new(assign_target.clone()), actual_op, Box::new(rhs));
                 
                 // 1b. Overwrite LHS with the full assignment: x = (x + 5)
                 // Use '=' as the operator for the final AST node
-                lhs = Expr::Infix(Box::new(var_id), '=', Box::new(arithmetic_expr));
+                lhs = Expr::Infix(Box::new(assign_target), '=', Box::new(arithmetic_expr));
                 continue;
             }
 
@@ -683,12 +807,10 @@ enum FunctionControlFlow {
     Print(String),   
 }
 
-// REMOVED: execute_block_body function is no longer needed.
-
 fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Value, String> {
     //debug!("Evaluating expr: {:?}", expr);
     match expr {
-        // Logic to determine Integer vs Float from the original string
+        // ... (Expr::Num, Expr::Str, Expr::Var remain the same)
         Expr::Num(s) => {
             if s.contains('.') {
                 let f = s.parse::<f64>().map_err(|e| format!("Invalid float: {}", e))?;
@@ -704,31 +826,157 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
             .get(id)
             .cloned()
             .ok_or_else(|| format!("Cannot evaluate uninitialized variable: {}", id)),
-        Expr::Call(name, args) => execute_function(name, args, env, func_defs),
+        
+        // ADDED: Unary Prefix (e.g., -x)
+        Expr::Prefix(op, rhs) => {
+            let val = eval(rhs, env, func_defs)?;
+            match (*op, val) {
+                ('-', Value::Integer(n)) => Ok(Value::Integer(-n)),
+                ('+', Value::Integer(n)) => Ok(Value::Integer(n)),
+                ('-', Value::Float(n)) => Ok(Value::Float(-n)),
+                ('+', Value::Float(n)) => Ok(Value::Float(n)),
+                (_, v) => Err(format!("Unary operator '{}' only supports numbers. Found {:?}", op, v)),
+            }
+        }
+        
+        // MODIFIED: Array Literal Evaluation
+        Expr::Array(elements) => {
+            let evaluated_elements: Result<Vec<Value>, String> = elements
+                .iter()
+                .map(|e| eval(e, env, func_defs))
+                .collect();
+            Ok(Value::Array(evaluated_elements?))
+        }
+
+        // MODIFIED: Array Slicing/Indexing Evaluation (R-value)
+        Expr::Slice(array_expr, start_opt, end_opt) => {
+            // Note: This block is for R-value evaluation (reading from array) and doesn't need a mutable borrow of env for the array itself.
+            let array_val = eval(array_expr, env, func_defs)?;
+
+            let elements = match array_val {
+                Value::Array(v) => v,
+                _ => return Err(format!("Attempted to index/slice a non-array value: {:?}", array_val)),
+            };
+
+            // Determine array length for bounds and defaults
+            let len = elements.len() as isize;
+
+            // 1. Calculate start index (default 0)
+            let start_index = if let Some(start_expr) = start_opt {
+                let start_val = eval(start_expr, env, func_defs)?;
+                let index = match start_val {
+                    Value::Integer(n) => n.to_isize().ok_or("Array index too large or too small")?,
+                    _ => return Err(format!("Array index must be an Integer, found {:?}", start_val)),
+                };
+                // Handle negative indexing, defaulting to 0 if out of bounds on the low end
+                let calculated_start = if index < 0 { len + index } else { index };
+                (calculated_start.max(0).min(len)) as usize
+            } else if end_opt.is_some() {
+                 0 // Default start index for slicing (e.g., arr[:end])
+            } else {
+                // If it is an L-value assignment (arr[i] = x), the L-value block handles validation.
+                // If it is an R-value index read (arr[i]), start_opt will be Some and this branch isn't reached.
+                // This branch should only be reached if the slice is empty, e.g. arr[] which is a parser error.
+                return Err("Internal Error: Array index expression missing in R-value evaluation".to_string());
+            };
+
+            // 2. Calculate end index (default array length or start+1 for simple index)
+            let end_index = if let Some(end_expr) = end_opt {
+                let end_val = eval(end_expr, env, func_defs)?;
+                let index = match end_val {
+                    Value::Integer(n) => n.to_isize().ok_or("Array index too large or too small")?,
+                    _ => return Err(format!("Array index must be an Integer, found {:?}", end_val)),
+                };
+                // Handle negative indexing, defaulting to len if out of bounds on the high end
+                let calculated_end = if index < 0 { len + index } else { index };
+                (calculated_end.max(0).min(len)) as usize
+            } else if end_opt.is_some() || (start_opt.is_some() && end_opt.is_some()) {
+                // If it's a slice (arr[start:] or arr[:end] or arr[start:end]), default end is full length
+                len as usize
+            } else {
+                // If it's simple indexing (arr[index]), the end is start + 1
+                start_index + 1
+            };
+
+            // 3. Bounds and Order checks
+            if start_index > end_index || start_index > len as usize || end_index > len as usize {
+                return Err(format!(
+                    "Array slice index error: start index {} must be <= end index {} (size {})", 
+                    start_index, end_index, len
+                ));
+            }
+
+            // 4. Perform slice/index extraction
+            let result_elements: Vec<Value> = elements[start_index..end_index].to_vec();
+
+            // If the result is a single element slice (simple indexing), return the element directly, otherwise return a new Array
+            // If end_opt is Some, it's a slice (arr[:end] or arr[start:end]), so return Value::Array regardless of length.
+            if result_elements.len() == 1 && end_opt.is_none() && start_opt.is_some() {
+                Ok(result_elements.into_iter().next().unwrap())
+            } else {
+                Ok(Value::Array(result_elements))
+            }
+        }
         
         // Assignment (=)
         Expr::Infix(lhs, op, rhs) if *op == '=' => {
-            let var_name = match &**lhs {
-                Expr::Var(id) => id,
-                _ => return Err("Assignment target must be a variable".to_string()),
-            };
+            // Evaluate the RHS expression first, before any mutable borrow of the environment
             let val = eval(rhs, env, func_defs)?;
-            env.insert(var_name.clone(), val.clone());
-            Ok(val)
-        }
-        
-        // Unary (+/-)
-        Expr::Prefix(op, rhs) => {
-            let val = eval(rhs, env, func_defs)?;
-            match op {
-                '+' => Ok(val),
-                '-' => match val {
-                    // Use BigInt negation
-                    Value::Integer(n) => Ok(Value::Integer(-n)),
-                    Value::Float(n) => Ok(Value::Float(-n)),
-                    _ => Err(format!("Unary minus only works on numbers, found {:?}", val)),
-                },
-                _ => Err(format!("Unknown prefix operator: {}", op)),
+            
+            match &**lhs {
+                Expr::Var(id) => {
+                    env.insert(id.clone(), val.clone());
+                    Ok(val)
+                }
+                // MODIFIED: Index Assignment (arr[3] = 10)
+                Expr::Slice(array_expr, start_opt, end_opt) => {
+                    
+                    // Assignment to slice (arr[i:j] = ...) is not supported, only single index assignment.
+                    if end_opt.is_some() {
+                        return Err("Assignment to array slice (arr[start:end] = ...) is not supported. Only assignment to a single index (arr[index] = ...) is allowed.".to_string());
+                    }
+                    let index_expr = start_opt.as_ref().ok_or("Array index expression missing for assignment")?;
+
+                    // --- FIX FOR E0499: Evaluate index before mutable borrow ---
+                    let index = match eval(index_expr, env, func_defs)? {
+                        Value::Integer(n) => n.to_isize().ok_or("Array index too large or too small")?,
+                        v => return Err(format!("Array index must be an Integer, found {:?}", v)),
+                    };
+                    // --- END FIX ---
+
+                    // Target of assignment (the array variable) must be Expr::Var
+                    let array_var_name = match &**array_expr {
+                        Expr::Var(id) => id,
+                        _ => return Err("Left-hand side array must be a simple variable (e.g., arr[i] = 5, not (fn())[i] = 5)".to_string()),
+                    };
+                    
+                    // Get the mutable array value from the environment (First mutable borrow)
+                    let array_val_ref = env
+                        .get_mut(array_var_name)
+                        .ok_or_else(|| format!("Cannot assign to uninitialized array variable: {}", array_var_name))?;
+
+                    // Now that index is calculated and we have the mutable ref, proceed.
+                    
+                    let elements = match array_val_ref {
+                        Value::Array(v) => v,
+                        _ => return Err("Variable is not an array and cannot be indexed for assignment".to_string()),
+                    };
+
+                    let len = elements.len() as isize;
+                    let actual_index = if index < 0 { len + index } else { index };
+
+                    // Check bounds and perform assignment (mutability)
+                    if actual_index < 0 || actual_index as usize >= elements.len() {
+                        return Err(format!("Array index out of bounds for assignment: {} (size {})", actual_index, len));
+                    }
+
+                    // Perform the mutable update
+                    elements[actual_index as usize] = val.clone();
+
+                    // Assignment returns the assigned value
+                    Ok(val)
+                }
+                _ => return Err("Assignment target must be a variable or an index expression".to_string()),
             }
         }
         
@@ -755,10 +1003,9 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                         }
                         '/' => {
                             if r.is_zero() {
-                                // Integer division results in an integer, but we still check for zero
+                                // Keep integer division as integer division (no float promotion)
                                 Err("Division by zero".to_string()) 
                             } else {
-                                // Keep integer division as integer division (no float promotion)
                                 Ok(Value::Integer(l / r))
                             }
                         }
@@ -782,6 +1029,12 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                 (Value::String(mut l), Value::String(r)) if *op == '+' => {
                     l.push_str(&r);
                     return Ok(Value::String(l));
+                }
+                
+                // MODIFIED: Array Concatenation (+)
+                (Value::Array(mut l), Value::Array(r)) if *op == '+' => {
+                    l.extend(r.into_iter()); // Append elements from the right array
+                    return Ok(Value::Array(l));
                 }
                 
                 // 3. Mixed or Float Arithmetic (Coerce to f64)
@@ -829,7 +1082,7 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
             }
         }
 
-        // Comparison (==, !=, <, >, <=, >=, ===, !==)
+        // ... Expr::Cmp and Expr::Logic remain the same ...
         Expr::Cmp(lhs, op, rhs) => {
             let left_val = eval(lhs, env, func_defs)?;
             let right_val = eval(rhs, env, func_defs)?;
@@ -914,24 +1167,39 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                 }
             }
         }
+        Expr::Call(name, args) => execute_function(name, args, env, func_defs),
     }
 }
 
-// CHANGE: function now uses Vec<Statement>
+// NEW: Native function definitions
+type NativeFunction = fn(&str, &mut Environment, &FuncDefs, Vec<Value>) -> Result<Value, String>;
+
+fn get_native_function(name: &str) -> Option<NativeFunction> {
+    match name {
+        // Only 'length' is kept as a built-in helper for arrays
+        "length" => Some(native_length),
+        // All other array manipulation logic (slicing, mutability) is handled by Expr::Slice and Expr::Infix.
+        _ => None,
+    }
+}
+
+// --- Array Helper Functions ---
+
+fn native_length(fn_name: &str, _env: &mut Environment, _func_defs: &FuncDefs, mut args: Vec<Value>) -> Result<Value, String> {
+    if args.len() != 1 {
+        return Err(format!("'{}' expects 1 argument (array), found {}", fn_name, args.len()));
+    }
+    match args.remove(0) {
+        Value::Array(a) => Ok(Value::Integer(BigInt::from(a.len()))),
+        v => Err(format!("Argument to '{}' must be an Array, found {:?}", fn_name, v)),
+    }
+}
+
+
 fn execute_function(fn_name: &str, arg_exprs: &[Expr], caller_env: &mut Environment, func_defs: &FuncDefs) -> Result<Value, String> {
     debug!("Executing function '{}', args: {:?}", fn_name, arg_exprs);
     
-    // CHANGE: Retrieve Vec<Statement>
-    let (params, body_statements) = func_defs.get(fn_name)
-        .ok_or_else(|| format!("Function '{}' is not defined", fn_name))?;
-        
-    if params.len() != arg_exprs.len() {
-        return Err(format!(
-            "Function '{}' expects {} arguments, but received {}",
-            fn_name, params.len(), arg_exprs.len()
-        ));
-    }
-    
+    // Evaluate arguments first
     let evaluated_args: Vec<Value> = arg_exprs
         .iter()
         .map(|e| {
@@ -941,50 +1209,69 @@ fn execute_function(fn_name: &str, arg_exprs: &[Expr], caller_env: &mut Environm
         })
         .collect::<Result<Vec<Value>, String>>()?;
     
-    let mut local_env = Environment::new();
-    for (param_name, arg_value) in params.iter().zip(evaluated_args.into_iter()) {
-        local_env.insert(param_name.clone(), arg_value);
-    }
-    //debug!("Local env for '{}': {:?}", fn_name, local_env);
+    // 1. Check for Native Functions
+    if let Some(native_func) = get_native_function(fn_name) {
+        // All native functions are executed directly now
+        native_func(fn_name, caller_env, func_defs, evaluated_args)
+    } 
+    // 2. Check for User-Defined Functions
+    else if let Some((params, body_statements)) = func_defs.get(fn_name) {
+        if params.len() != evaluated_args.len() {
+            return Err(format!(
+                "Function '{}' expects {} arguments, but received {}",
+                fn_name, params.len(), evaluated_args.len()
+            ));
+        }
+        
+        let mut local_env = Environment::new();
+        for (param_name, arg_value) in params.iter().zip(evaluated_args.into_iter()) {
+            local_env.insert(param_name.clone(), arg_value);
+        }
+        //debug!("Local env for '{}': {:?}", fn_name, local_env);
 
-    let mut last_value = Value::Void;
+        let mut last_value = Value::Void;
 
-    // CHANGE: Loop through the pre-parsed statements directly
-    for (i, stmt) in body_statements.iter().enumerate() {
-        match run_statement_in_function(stmt, &mut local_env, func_defs) {
-            Ok(flow) => {
-                match flow {
-                    FunctionControlFlow::Return(val) => {
-                        // Explicit return
-                        //debug!("Explicit return triggered from block with value: {:?}", val);
-                        return Ok(val);
-                    }
-                    FunctionControlFlow::Continue(val) => {
-                        last_value = val;
-                    }
-                    FunctionControlFlow::Print(output) => {
-                        writeln!(io::stdout(), "{}", output).map_err(|e| format!("Failed to write to stdout: {}", e))?;
-                        io::stdout().flush().map_err(|e| format!("Failed to flush stdout: {}", e))?;
-                        let mut log_file = OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("runlog")
-                            .map_err(|e| format!("Failed to open runlog: {}", e))?;
-                        writeln!(log_file, "Block Output (Stmt {}): {}", i + 1, output)
-                            .map_err(|e| format!("Failed to write to runlog: {}", e))?;
-                        log_file.flush().map_err(|e| format!("Failed to flush runlog: {}", e))?;
+        // CHANGE: Loop through the pre-parsed statements directly
+        for (i, stmt) in body_statements.iter().enumerate() {
+            match run_statement_in_function(stmt, &mut local_env, func_defs) {
+                Ok(flow) => {
+                    match flow {
+                        FunctionControlFlow::Return(val) => {
+                            // Explicit return
+                            //debug!("Explicit return triggered from block with value: {:?}", val);
+                            return Ok(val);
+                        }
+                        FunctionControlFlow::Continue(val) => {
+                            last_value = val;
+                        }
+                        FunctionControlFlow::Print(output) => {
+                            // Write output directly to stdout for immediate display
+                            writeln!(io::stdout(), "{}", output).map_err(|e| format!("Failed to write to stdout: {}", e))?;
+                            io::stdout().flush().map_err(|e| format!("Failed to flush stdout: {}", e))?;
+                            // Also log to runlog
+                            let mut log_file = OpenOptions::new().create(true).append(true).open("runlog").map_err(|e| format!("Failed to open runlog: {}", e))?;
+                            writeln!(log_file, "Block Output (Stmt {}): {}", i + 1, output).map_err(|e| format!("Failed to write to runlog: {}", e))?;
+                            log_file.flush().map_err(|e| format!("Failed to flush runlog: {}", e))?;
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                return Err(format!("Function '{}' Execution Error (Stmt {}): {}", fn_name, i + 1, e));
+                Err(e) => {
+                    return Err(format!("Function '{}' Execution Error (Stmt {}): {}", fn_name, i + 1, e));
+                }
             }
         }
+        
+        // Implicit return of the last expression value or Void
+        Ok(last_value)
+    } 
+    // 3. Undefined Function
+    else {
+        Err(format!("Function '{}' is not defined", fn_name))
     }
-    
-    // Implicit return of the last expression value or Void
-    Ok(last_value)
 }
+
+// The rest of the `run_statement_in_function`, `run_statement`, and `main` functions
+// remain largely the same, except for incorporating the function call logic into the interpreter.
 
 fn run_statement_in_function(stmt: &Statement, env: &mut Environment, func_defs: &FuncDefs) -> Result<FunctionControlFlow, String> {
     debug!("Running statement in function: {:?}", stmt);
@@ -1011,6 +1298,7 @@ fn run_statement_in_function(stmt: &Statement, env: &mut Environment, func_defs:
                         Value::String(s) => s.clone(), 
                         Value::Boolean(b) => format!("{}", if *b { "true" } else { "false" }), 
                         Value::Void => String::from("void"),
+                        Value::Array(v) => format!("{}", Value::Array(v.clone())), // Use Array's display for formatting
                     };
                     if let Some(start) = output[current_pos..].find(placeholder) {
                         let full_start = current_pos + start;
@@ -1130,6 +1418,7 @@ fn run_statement(stmt: &Statement, env: &mut Environment, func_defs: &mut FuncDe
                         Value::String(s) => s.clone(), 
                         Value::Boolean(b) => format!("{}", if *b { "true" } else { "false" }), 
                         Value::Void => String::from("void"),
+                        Value::Array(v) => format!("{}", Value::Array(v.clone())), 
                     };
                     if let Some(start) = output[current_pos..].find(placeholder) {
                         let full_start = current_pos + start;
@@ -1160,8 +1449,8 @@ fn run_statement(stmt: &Statement, env: &mut Environment, func_defs: &mut FuncDe
                 .open("runlog")
                 .map_err(|e| format!("Failed to open runlog: {}", e))?;
             writeln!(log_file, "Output: {}", output)
-                .map_err(|e| format!("Failed to write to runlog: {}", e))?;
-            log_file.flush().map_err(|e| format!("Failed to flush runlog: {}", e))?;
+                .expect("Failed to write to runlog");
+            log_file.flush().expect("Failed to flush runlog");
             Ok(output)
         }
         // CHANGE: Store Vec<Statement> directly in FuncDefs
@@ -1245,7 +1534,7 @@ fn main() {
         Ok(statements) => {
             debug!("Parsed statements: {:?}", statements);
             for (i, stmt) in statements.into_iter().enumerate() {
-                writeln!(log_file, "\nExecuting Statement {}", i + 1)
+                writeln!(log_file, "\nExecuting Statement {}\n-----------------------", i + 1)
                     .expect("Failed to write to runlog");
                 log_file.flush().expect("Failed to flush runlog");
                 match run_statement(&stmt, &mut env, &mut func_defs) {
