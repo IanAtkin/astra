@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 env_logger = "0.11.8"
 log = "0.4.28"
+num-bigint = "0.4.6"
+num-traits = "0.2.19"

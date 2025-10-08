@@ -1,0 +1,12 @@
+fn test_operators() [
+    x = 2
+    y = 3
+    print("2 ^ 3 = {}", x ^ y)      ; Should print: 2 ^ 3 = 8
+    print("10 % 3 = {}", 10 % 3)    ; Should print: 10 % 3 = 1
+    x += 5
+    print("x += 5 -> x = {}", x)    ; Should print: x += 5 -> x = 7
+    x -= 2
+    print("x -= 2 -> x = {}", x)    ; Should print: x -= 2 -> x = 5
+]
+
+test_operators()

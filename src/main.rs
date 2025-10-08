@@ -6,11 +6,18 @@ use std::io::{self, Write, BufWriter};
 use log::{debug, LevelFilter};
 use env_logger;
 
+// --- Big Integer Imports ---
+use num_bigint::BigInt;
+// Imported traits to enable methods like is_positive (Signed), to_u32, and to_f64 (ToPrimitive)
+use num_traits::{Zero, One, Signed, ToPrimitive}; 
+// ---------------------------
+
 // --- Value and AST Definitions ---
 
 #[derive(Debug, Clone, PartialEq)] 
 enum Value {
-    Integer(i64), 
+    // Changed i64 to BigInt to support arbitrary precision arithmetic
+    Integer(BigInt), 
     Float(f64),
     String(String),
     Boolean(bool), 
@@ -18,7 +25,7 @@ enum Value {
 }
 
 impl Value {
-    // Helper to check if a value is numeric (Integer or Float)
+    /// Helper to check if a value is numeric (Integer or Float)
     fn is_number(&self) -> bool {
         matches!(self, Value::Integer(_) | Value::Float(_))
     }
@@ -29,6 +36,7 @@ impl fmt::Display for Value {
         match self {
             Value::Integer(n) => write!(f, "{}", n),
             Value::Float(n) => write!(f, "{}", n),
+            // Note: Display of Value::String includes quotes
             Value::String(s) => write!(f, "\"{}\"", s), 
             Value::Boolean(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Void => write!(f, "void"),
@@ -51,7 +59,7 @@ impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expr::Var(id) => write!(f, "{}", id),
-            Expr::Num(s) => write!(f, "{}", s), // Display the string
+            Expr::Num(s) => write!(f, "{}", s), 
             Expr::Str(s) => write!(f, "\"{}\"", s),
             Expr::Prefix(op, expr) => write!(f, "({} {})", op, expr),
             Expr::Infix(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
@@ -99,10 +107,8 @@ struct Lexer {
 
 impl Lexer {
     fn new(input: &str) -> Lexer {
-        Lexer {
-            input: input.chars().collect(),
-            pos: 0,
-        }
+        let input_chars: Vec<char> = input.chars().collect();
+        Lexer { input: input_chars, pos: 0 }
     }
 
     fn peek_char(&self) -> Option<char> {
@@ -188,6 +194,16 @@ impl Lexer {
                 Token::Ident(ident)
             }
         } 
+        // Compound Assignment and Single Arithmetic Operators (+, -, *, /, %, ^)
+        else if "+-*/%^".contains(ch) {
+            if self.peek_char() == Some('=') {
+                self.next_char(); // consume '='
+                // Use Cmp for compound assignment tokens to carry the string value
+                return Token::Cmp(format!("{}{}", ch, '=')); 
+            }
+            Token::Op(ch) // Single arithmetic operator
+        }
+        // Comparison and Simple Assignment (=)
         else if ch == '=' {
             if self.peek_char() == Some('=') {
                 self.next_char(); 
@@ -197,7 +213,7 @@ impl Lexer {
                 }
                 return Token::Cmp("==".to_string());
             }
-            Token::Op(ch)
+            Token::Op(ch) // Simple assignment '='
         } else if ch == '!' {
             if self.peek_char() == Some('=') {
                 self.next_char();
@@ -233,6 +249,7 @@ impl Lexer {
                 continue;
             }
             
+            // Handle comments (';' until newline)
             if self.peek_char() == Some(';') {
                 self.pos += 1; 
                 
@@ -275,6 +292,10 @@ impl Parser {
                 Token::Keyword(k) if k == "fn" => self.parse_fn_statement(),
                 Token::Keyword(k) if k == "return" => self.parse_return_statement(),
                 Token::Keyword(k) if k == "if" => self.parse_if_statement(),
+                // Defensive check: The assignment operator cannot start a statement.
+                Token::Op(op) if op == '=' => {
+                    return Err("The assignment operator '=' cannot start a statement. Assignment must follow a variable (e.g., x = 10).".to_string());
+                }
                 Token::Keyword(k) if k == "def" => return Err(format!("The 'def' keyword is deprecated. Please use 'fn' for function definitions (e.g., fn name(...) [...])")),
                 Token::Keyword(k) if k == "else" => return Err(format!("The 'else' keyword must immediately follow a closing ']' of an 'if' block.")),
                 _ => {
@@ -533,26 +554,60 @@ impl Parser {
         };
         loop {
             let op_token = self.current.clone();
-            let op = match op_token {
+            
+            let op_str = match op_token {
                 Token::Op(op) => op.to_string(),
                 Token::Cmp(op) => op,
                 Token::Eof => break,
                 _ => break,
             };
 
-            if let Some((l_bp, r_bp, is_cmp)) = binding_power(&op) {
+            // 1. Check for Compound Assignment (e.g., +=, -=) - MUST be desugared here
+            if op_str.len() == 2 && op_str.ends_with('=') && "+-*/%^".contains(op_str.chars().next().unwrap()) {
+                let actual_op = op_str.chars().next().unwrap(); // e.g., '+' or '-'
+                
+                // Compound assignment (A += B) has the same precedence (2) as simple assignment (A = B)
+                if 2 < min_bp {
+                    break;
+                }
+                
+                self.advance(); // consume the compound operator token (e.g., +=)
+                
+                // The right hand side of the assignment
+                let rhs = self.expr_bp(1)?; // Right binding power of assignment is 1
+
+                // Left-hand side must be a variable
+                let var_id = match lhs {
+                    Expr::Var(ref id) => Expr::Var(id.clone()), // Clone the Var(id) for both LHS and RHS of new Infix
+                    _ => return Err(format!("Left-hand side of compound assignment '{}' must be a variable", op_str)),
+                };
+
+                // Desugar: x += 5  -->  x = (x + 5)
+                // 1a. Create the arithmetic expression: (x + 5)
+                let arithmetic_expr = Expr::Infix(Box::new(var_id.clone()), actual_op, Box::new(rhs));
+                
+                // 1b. Overwrite LHS with the full assignment: x = (x + 5)
+                // Use '=' as the operator for the final AST node
+                lhs = Expr::Infix(Box::new(var_id), '=', Box::new(arithmetic_expr));
+                continue;
+            }
+
+            // 2. Check for simple assignment, comparison, or standard infix operators
+            if let Some((l_bp, r_bp, is_cmp)) = binding_power(op_str.as_str()) {
                 if l_bp < min_bp {
                     break;
                 }
                 self.advance();
-                //debug!("Parsing infix/cmp op {}, right expr with bp {}", op, r_bp);
+                //debug!("Parsing infix/cmp op {}, right expr with bp {}", op_str, r_bp);
                 let rhs = self.expr_bp(r_bp)?;
                 
                 lhs = if is_cmp {
-                    Expr::Cmp(Box::new(lhs), op, Box::new(rhs))
+                    // Cmp covers ==, !=, <, >, <=, >=, ===, !==
+                    Expr::Cmp(Box::new(lhs), op_str, Box::new(rhs))
                 } else {
-                    // This is safe because non-comparison operators are guaranteed to be single chars
-                    Expr::Infix(Box::new(lhs), op.chars().next().unwrap(), Box::new(rhs))
+                    // Infix covers simple assignment (=) and standard arithmetic (+, -, *, /, %, ^)
+                    let single_char_op = op_str.chars().next().unwrap(); 
+                    Expr::Infix(Box::new(lhs), single_char_op, Box::new(rhs))
                 };
                 continue;
             }
@@ -572,10 +627,11 @@ fn prefix_binding_power(op: char) -> ((), u8) {
 
 fn binding_power(op: &str) -> Option<(u8, u8, bool)> { // (l_bp, r_bp, is_comparison)
     match op {
-        "=" => Some((2, 1, false)), // Assignment
-        "==" | "!=" | "<" | ">" | "<=" | ">=" | "===" | "!==" => Some((3, 4, true)), 
+        "=" => Some((2, 1, false)), // Simple Assignment
+        "==" | "!=" | "<" | ">" | "<=" | ">=" | "===" | "!==" => Some((3, 4, true)), // Comparison
         "+" | "-" => Some((5, 6, false)), // Addition/Subtraction
-        "*" | "/" => Some((7, 8, false)), // Multiplication/Division
+        "*" | "/" | "%" => Some((7, 8, false)), // Multiplication/Division/Modulo
+        "^" => Some((9, 10, false)), // Exponentiation (Higher precedence)
         _ => None,
     }
 }
@@ -663,7 +719,8 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                 let f = s.parse::<f64>().map_err(|e| format!("Invalid float: {}", e))?;
                 Ok(Value::Float(f))
             } else {
-                let i = s.parse::<i64>().map_err(|e| format!("Invalid integer: {}", e))?;
+                // Parse directly into BigInt
+                let i = s.parse::<BigInt>().map_err(|e| format!("Invalid integer: {}", e))?;
                 Ok(Value::Integer(i))
             }
         },
@@ -691,6 +748,7 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
             match op {
                 '+' => Ok(val),
                 '-' => match val {
+                    // Use BigInt negation
                     Value::Integer(n) => Ok(Value::Integer(-n)),
                     Value::Float(n) => Ok(Value::Float(-n)),
                     _ => Err(format!("Unary minus only works on numbers, found {:?}", val)),
@@ -699,66 +757,101 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
             }
         }
         
-        // Arithmetic (+, -, *, /)
+        // Arithmetic (+, -, *, /, %, ^) - CONSOLIDATED LOGIC
         Expr::Infix(lhs, op, rhs) => {
             let left_val = eval(lhs, env, func_defs)?;
             let right_val = eval(rhs, env, func_defs)?;
-            
-            if !left_val.is_number() || !right_val.is_number() {
-                if *op == '+' {
-                    match (left_val, right_val) {
-                        (Value::String(mut l), Value::String(r)) => {
-                            l.push_str(&r);
-                            return Ok(Value::String(l));
-                        }
-                        (l, r) => return Err(format!("Incompatible types for operator '{}': {:?} and {:?}", op, l, r)),
-                    }
-                } else {
-                    return Err(format!("Incompatible types for operator '{}': {:?} and {:?}", op, left_val, right_val));
-                }
-            }
-            
-            let (l_f, r_f) = match (left_val, right_val) {
+
+            // Use a single match to cover all type combinations, preventing move errors.
+            match (left_val, right_val) {
+                
+                // 1. Pure BigInt Arithmetic
                 (Value::Integer(l), Value::Integer(r)) => {
-                    // Integer-only arithmetic. Division is the only one that promotes to float.
                     return match op {
                         '+' => Ok(Value::Integer(l + r)),
                         '-' => Ok(Value::Integer(l - r)),
                         '*' => Ok(Value::Integer(l * r)),
-                        '/' => {
-                            if r == 0 {
-                                Err("Division by zero".to_string())
+                        '%' => {
+                            if r.is_zero() {
+                                Err("Modulo by zero".to_string())
                             } else {
-                                // Division promotes to float
-                                Ok(Value::Float(l as f64 / r as f64))
+                                Ok(Value::Integer(l % r))
+                            }
+                        }
+                        '/' => {
+                            if r.is_zero() {
+                                // Integer division results in an integer, but we still check for zero
+                                Err("Division by zero".to_string()) 
+                            } else {
+                                // Keep integer division as integer division (no float promotion)
+                                Ok(Value::Integer(l / r))
+                            }
+                        }
+                        '^' => {
+                            // Exponentiation: Base is BigInt, exponent must be converted to u32
+                            if r.is_positive() && r <= BigInt::from(u32::MAX) { 
+                                // to_u32 is available due to ToPrimitive trait import
+                                let exp: u32 = r.to_u32().ok_or("Exponent too large to convert to u32")?; 
+                                Ok(Value::Integer(l.pow(exp)))
+                            } else if r.is_zero() {
+                                Ok(Value::Integer(BigInt::one()))
+                            } else {
+                                Err("Integer exponentiation only supports positive exponents up to u32 max".to_string())
                             }
                         }
                         _ => Err(format!("Unknown numeric infix operator: {}", op)),
                     };
                 }
-                // Mixed or Float arithmetic, both are promoted to float
-                (Value::Integer(l), Value::Float(r)) => (l as f64, r),
-                (Value::Float(l), Value::Integer(r)) => (l, r as f64),
-                (Value::Float(l), Value::Float(r)) => (l, r),
-                _ => unreachable!(), 
-            };
 
-            // Floating point arithmetic
-            let result_f = match op {
-                '+' => Ok(l_f + r_f),
-                '-' => Ok(l_f - r_f),
-                '*' => Ok(l_f * r_f),
-                '/' => {
-                    if r_f.abs() < f64::EPSILON {
-                        Err("Division by zero".to_string())
-                    } else {
-                        Ok(l_f / r_f)
-                    }
+                // 2. String Concatenation (+) - only works if both are strings
+                (Value::String(mut l), Value::String(r)) if *op == '+' => {
+                    l.push_str(&r);
+                    return Ok(Value::String(l));
                 }
-                _ => Err(format!("Unknown numeric infix operator: {}", op)),
-            }?;
-            
-            Ok(Value::Float(result_f))
+                
+                // 3. Mixed or Float Arithmetic (Coerce to f64)
+                (l, r) if l.is_number() && r.is_number() => {
+                    // Coercion: l and r are guaranteed to be Int or Float.
+                    // to_f64 is available due to ToPrimitive import
+                    let l_f = match l {
+                        Value::Float(f) => f,
+                        Value::Integer(i) => i.to_f64().ok_or("Left BigInt too large for float conversion")?, 
+                        _ => unreachable!(), 
+                    };
+                    let r_f = match r {
+                        Value::Float(f) => f,
+                        Value::Integer(i) => i.to_f64().ok_or("Right BigInt too large for float conversion")?,
+                        _ => unreachable!(), 
+                    };
+
+                    let result_f = match op {
+                        '+' => Ok(l_f + r_f),
+                        '-' => Ok(l_f - r_f),
+                        '*' => Ok(l_f * r_f),
+                        '%' => {
+                            if r_f.abs() < f64::EPSILON {
+                                Err("Modulo by zero in float operation".to_string())
+                            } else {
+                                Ok(l_f % r_f)
+                            }
+                        }
+                        '/' => {
+                            if r_f.abs() < f64::EPSILON {
+                                Err("Division by zero in float operation".to_string())
+                            } else {
+                                Ok(l_f / r_f)
+                            }
+                        }
+                        '^' => Ok(l_f.powf(r_f)),
+                        _ => Err(format!("Unknown numeric infix operator: {}", op)),
+                    }?;
+                    
+                    Ok(Value::Float(result_f))
+                }
+
+                // 4. Incompatible Types (Error)
+                (l, r) => Err(format!("Incompatible types for operator '{}': {:?} and {:?}", op, l, r)),
+            }
         }
 
         // Comparison (==, !=, <, >, <=, >=, ===, !==)
@@ -776,9 +869,14 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                     let non_strict_equal = match (&left_val, &right_val) {
                         // Exact match (Value and Type)
                         (l, r) if l == r => true,
-                        // Non-strict coercion for Int/Float
-                        (Value::Integer(l), Value::Float(r)) | (Value::Float(r), Value::Integer(l)) => {
-                            (*l as f64) == *r
+                        // Non-strict coercion for BigInt/Float
+                        (Value::Integer(l), Value::Float(r)) => {
+                            // to_f64 is available due to ToPrimitive trait import.
+                            l.to_f64().map_or(false, |l_f| l_f == *r)
+                        }
+                        (Value::Float(l), Value::Integer(r)) => {
+                            // to_f64 is available due to ToPrimitive trait import.
+                            r.to_f64().map_or(false, |r_f| *l == r_f)
                         }
                         // All other combinations are false (String/Bool/Void != Int/Float, etc.)
                         _ => false,
@@ -794,7 +892,7 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                             "<" => l < r, ">" => l > r, "<=" => l <= r, ">=" => l >= r, _ => unreachable!(),
                         },
                         (Value::Float(l), Value::Float(r)) => match op.as_str() {
-                            "<" => l < r, ">" => l > r, "<=" => l <= r, ">=" => l >= r, _ => unreachable!(),
+                            "<" => l < r, ">" => l > r, "<=" => l <= r, ">=" => r >= r, _ => unreachable!(), 
                         },
                         (Value::String(l), Value::String(r)) => match op.as_str() {
                             "<" => l < r, ">" => l > r, "<=" => l <= r, ">=" => l >= r, _ => unreachable!(), 
@@ -908,8 +1006,11 @@ fn run_statement_in_function(stmt: &Statement, env: &mut Environment, func_defs:
                 return Ok(FunctionControlFlow::Continue(Value::Void)); 
             };
             
+            // Recurse execution into the block body
             match execute_block_body(body_to_execute, env, func_defs, true) {
+                // If the inner block returns a value, we return it up the function chain
                 Ok(Some(val)) => Ok(FunctionControlFlow::Return(val)),
+                // If the inner block returns nothing, we just continue the current function execution
                 Ok(None) => Ok(FunctionControlFlow::Continue(Value::Void)),
                 Err(e) => Err(e),
             }
@@ -953,7 +1054,7 @@ fn run_statement(stmt: &Statement, env: &mut Environment, func_defs: &mut FuncDe
                     let result_str = match result {
                         Value::Integer(n) => format!("{}", n),
                         Value::Float(n) => format!("{}", n),
-                        Value::String(s) => s.clone(),
+                        Value::String(s) => s.clone(), 
                         Value::Boolean(b) => format!("{}", if *b { "true" } else { "false" }), 
                         Value::Void => String::from("void"),
                     };
