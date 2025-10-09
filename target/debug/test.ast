@@ -83,3 +83,11 @@ if(x != 2 or y != 3) [
 	print("neither condition is satisfied, x = {}, y = {}", x, y)
 ]
 
+var1 = true
+var2 = false
+
+if(var1 and !var2) [
+	print("var1 is true and var2 is false")
+] else [
+	print("one or both conditions are false")
+]

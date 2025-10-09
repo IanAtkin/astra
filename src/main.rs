@@ -21,7 +21,7 @@ enum Value {
     Float(f64),
     String(String),
     Boolean(bool), 
-    Array(Vec<Value>), // <--- MODIFIED: Added Array type
+    Array(Vec<Value>), 
     Void,
 }
 
@@ -39,7 +39,8 @@ impl fmt::Display for Value {
             Value::Float(n) => write!(f, "{}", n),
             // Note: Display of Value::String includes quotes
             Value::String(s) => write!(f, "\"{}\"", s), 
-            Value::Boolean(b) => write!(f, "{}", if *b { "true" } else { "false" }),
+            // Corrected: Outputs 'true' or 'false' without quotes
+            Value::Boolean(b) => write!(f, "{}", if *b { "true" } else { "false" }), 
             Value::Void => write!(f, "void"),
             // MODIFIED: Display for Array
             Value::Array(v) => {
@@ -67,13 +68,13 @@ enum Expr {
     Var(String),
     Num(String), // Stores raw number string to preserve type distinction (e.g., "1" vs "1.0")
     Str(String),
+    Bool(bool), // Boolean literal (true or false)
     Prefix(char, Box<Expr>),
     Infix(Box<Expr>, char, Box<Expr>),
     Cmp(Box<Expr>, String, Box<Expr>), 
-    // ADDED: Logic variant for 'and' and 'or'
     Logic(Box<Expr>, String, Box<Expr>),
-    Array(Vec<Expr>), // <--- MODIFIED: Array Literal (e.g., [1, 2, 3])
-    // MODIFIED: Slice variant for both indexing (arr[i]) and slicing (arr[i:j])
+    Array(Vec<Expr>), 
+    // Slice variant for both indexing (arr[i]) and slicing (arr[i:j])
     Slice(Box<Expr>, Option<Box<Expr>>, Option<Box<Expr>>), // (array_expr, start_expr_opt, end_expr_opt)
     Call(String, Vec<Expr>),
 }
@@ -84,10 +85,10 @@ impl fmt::Display for Expr {
             Expr::Var(id) => write!(f, "{}", id),
             Expr::Num(s) => write!(f, "{}", s), 
             Expr::Str(s) => write!(f, "\"{}\"", s),
+            Expr::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }), 
             Expr::Prefix(op, expr) => write!(f, "({} {})", op, expr),
             Expr::Infix(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Expr::Cmp(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs), 
-            // ADDED: Logic display
             Expr::Logic(lhs, op, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             // MODIFIED: Array display
             Expr::Array(elements) => {
@@ -132,10 +133,10 @@ impl fmt::Display for Expr {
 enum Statement {
     Expr(Expr),
     Print(Option<String>, Vec<Expr>),
-    // CHANGE: Function body now Vec<Statement>
+    // Function body now Vec<Statement>
     Def(String, Vec<String>, Vec<Statement>),
     Return(Option<Expr>),
-    // CHANGE: If and Else bodies now Vec<Statement>
+    // If and Else bodies now Vec<Statement>
     If(Expr, Vec<Statement>, Option<Vec<Statement>>),
 }
 
@@ -240,8 +241,8 @@ impl Lexer {
                     break;
                 }
             }
-            // MODIFIED: Added 'and' and 'or' as keywords
-            if ident == "print" || ident == "def" || ident == "fn" || ident == "return" || ident == "if" || ident == "else" || ident == "and" || ident == "or" {
+            // MODIFIED: Added 'and', 'or', 'true', and 'false' as keywords
+            if ident == "print" || ident == "def" || ident == "fn" || ident == "return" || ident == "if" || ident == "else" || ident == "and" || ident == "or" || ident == "true" || ident == "false" {
                 Token::Keyword(ident)
             } else {
                 Token::Ident(ident)
@@ -276,7 +277,7 @@ impl Lexer {
                 }
                 return Token::Cmp("!=".to_string());
             }
-            Token::Op(ch) 
+            Token::Op(ch) // Logical NOT operator '!'
         } else if ch == '<' {
             if self.peek_char() == Some('=') {
                 self.next_char();
@@ -447,8 +448,14 @@ impl Parser {
         debug!("Parsing return statement");
         self.advance(); // consume 'return' keyword
 
-        let has_expr = match self.current {
-            Token::Number(_) | Token::StringLiteral(_) | Token::Op('(') | Token::Op('[') | Token::Ident(_) | Token::Op('+') | Token::Op('-') => true, // ADDED Token::Op('[') for array literal
+        // FIX E0408: Split the match arms to prevent the compiler error about unbound variables.
+        let has_expr = match self.current.clone() {
+            // All expression starters that don't need a custom guard
+            Token::Number(_) | Token::StringLiteral(_) | Token::Op('(') | Token::Op('[') | Token::Ident(_) | Token::Op('+') | Token::Op('-') | Token::Op('!') => true, // <--- MODIFIED: Added Token::Op('!')
+            
+            // The Keyword case, which requires checking the inner string
+            Token::Keyword(k) if k == "true" || k == "false" => true,
+            
             _ => false,
         };
 
@@ -595,6 +602,14 @@ impl Parser {
                 self.advance();
                 Expr::Str(s)
             }
+            Token::Keyword(k) if k == "true" => { // Boolean literal true
+                self.advance();
+                Expr::Bool(true)
+            }
+            Token::Keyword(k) if k == "false" => { // Boolean literal false
+                self.advance();
+                Expr::Bool(false)
+            }
             Token::Op('(') => {
                 self.advance();
                 let expr = self.expr_bp(0)?;
@@ -604,7 +619,7 @@ impl Parser {
                 self.advance();
                 expr
             }
-            // MODIFIED: Array Literal parsing integrated as a prefix expression
+            // Array Literal parsing integrated as a prefix expression
             Token::Op('[') => {
                 self.advance(); // consume '['
                 let mut elements = Vec::new();
@@ -631,7 +646,8 @@ impl Parser {
             }
             // END MODIFIED
             
-            Token::Op(op) if op == '+' || op == '-' => {
+            // MODIFIED: Added '!' for Logical NOT
+            Token::Op(op) if op == '+' || op == '-' || op == '!' => {
                 self.advance();
                 let (_, r_bp) = prefix_binding_power(op);
                 let rhs = self.expr_bp(r_bp)?;
@@ -773,9 +789,11 @@ impl Parser {
     }
 }
 
+// MODIFIED: Added binding power for '!'
 fn prefix_binding_power(op: char) -> ((), u8) {
     match op {
         '+' | '-' => ((), 10),
+        '!' => ((), 16), // High precedence for NOT
         _ => ((), 0),
     }
 }
@@ -822,19 +840,25 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
             }
         },
         Expr::Str(s) => Ok(Value::String(s.clone())),
+        Expr::Bool(b) => Ok(Value::Boolean(*b)), // Handle Boolean literal
         Expr::Var(id) => env
             .get(id)
             .cloned()
             .ok_or_else(|| format!("Cannot evaluate uninitialized variable: {}", id)),
         
-        // ADDED: Unary Prefix (e.g., -x)
+        // MODIFIED: Unary Prefix (e.g., -x, !x)
         Expr::Prefix(op, rhs) => {
             let val = eval(rhs, env, func_defs)?;
             match (*op, val) {
+                // Arithmetic
                 ('-', Value::Integer(n)) => Ok(Value::Integer(-n)),
                 ('+', Value::Integer(n)) => Ok(Value::Integer(n)),
                 ('-', Value::Float(n)) => Ok(Value::Float(-n)),
                 ('+', Value::Float(n)) => Ok(Value::Float(n)),
+                // Logical NOT (!)
+                ('!', Value::Boolean(b)) => Ok(Value::Boolean(!b)),
+                // Error cases
+                ('!', v) => Err(format!("Unary operator '!' only supports booleans. Found {:?}", v)),
                 (_, v) => Err(format!("Unary operator '{}' only supports numbers. Found {:?}", op, v)),
             }
         }
@@ -850,7 +874,7 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
 
         // MODIFIED: Array Slicing/Indexing Evaluation (R-value)
         Expr::Slice(array_expr, start_opt, end_opt) => {
-            // Note: This block is for R-value evaluation (reading from array) and doesn't need a mutable borrow of env for the array itself.
+            // Note: This block is for R-value evaluation (reading from array) and doesn't need a mutable borrow of the environment for the array itself.
             let array_val = eval(array_expr, env, func_defs)?;
 
             let elements = match array_val {
@@ -891,7 +915,7 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                 let calculated_end = if index < 0 { len + index } else { index };
                 (calculated_end.max(0).min(len)) as usize
             } else if end_opt.is_some() || (start_opt.is_some() && end_opt.is_some()) {
-                // If it's a slice (arr[start:] or arr[:end] or arr[start:end]), default end is full length
+                // If it's a slice (arr[start:] or arr[start:end]), default end is full length
                 len as usize
             } else {
                 // If it's simple indexing (arr[index]), the end is start + 1
@@ -1040,7 +1064,7 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                 // 3. Mixed or Float Arithmetic (Coerce to f64)
                 (l, r) if l.is_number() && r.is_number() => {
                     // Coercion: l and r are guaranteed to be Int or Float.
-                    // to_f64 is available due to ToPrimitive import
+                    // to_f64 is available due to ToPrimitive trait import
                     let l_f = match l {
                         Value::Float(f) => f,
                         Value::Integer(i) => i.to_f64().ok_or("Left BigInt too large for float conversion")?, 
@@ -1099,11 +1123,11 @@ fn eval(expr: &Expr, env: &mut Environment, func_defs: &FuncDefs) -> Result<Valu
                         (l, r) if l == r => true,
                         // Non-strict coercion for BigInt/Float
                         (Value::Integer(l), Value::Float(r)) => {
-                            // to_f64 is available due to ToPrimitive trait import.
+                            // to_f64 is available due to ToPrimitive trait import
                             l.to_f64().map_or(false, |l_f| l_f == *r)
                         }
                         (Value::Float(l), Value::Integer(r)) => {
-                            // to_f64 is available due to ToPrimitive trait import.
+                            // to_f64 is available due to ToPrimitive trait import
                             r.to_f64().map_or(false, |r_f| *l == r_f)
                         }
                         // All other combinations are false (String/Bool/Void != Int/Float, etc.)
@@ -1315,8 +1339,9 @@ fn run_statement_in_function(stmt: &Statement, env: &mut Environment, func_defs:
                     return Err("Simple print (without format string) expects exactly one argument".to_string());
                 }
                 match &results[0] {
-                    Value::String(s) => s.clone(), 
+                    // MODIFIED: Explicitly format Boolean without quotes in simple print
                     Value::Boolean(b) => format!("{}", if *b { "true" } else { "false" }), 
+                    Value::String(s) => s.clone(), 
                     v => format!("{}", v),         
                 }
             };
@@ -1435,8 +1460,9 @@ fn run_statement(stmt: &Statement, env: &mut Environment, func_defs: &mut FuncDe
                     return Err("Simple print (without format string) expects exactly one argument".to_string());
                 }
                 match &results[0] {
-                    Value::String(s) => s.clone(), 
+                    // MODIFIED: Explicitly format Boolean without quotes in simple print
                     Value::Boolean(b) => format!("{}", if *b { "true" } else { "false" }), 
+                    Value::String(s) => s.clone(), 
                     v => format!("{}", v),         
                 }
             };
@@ -1447,7 +1473,7 @@ fn run_statement(stmt: &Statement, env: &mut Environment, func_defs: &mut FuncDe
                 .create(true)
                 .append(true)
                 .open("runlog")
-                .map_err(|e| format!("Failed to open runlog: {}", e))?;
+                .map_err(|e| format!("Failed to open runlog file: {}", e))?;
             writeln!(log_file, "Output: {}", output)
                 .expect("Failed to write to runlog");
             log_file.flush().expect("Failed to flush runlog");

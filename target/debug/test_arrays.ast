@@ -1,0 +1,42 @@
+arr = [1, 2, 3, 4, 5]
+print("arr = {}", arr)
+
+print("Element 3 is: {}", arr[3])
+print("Element 0 is: {}", arr[0])
+print("Element 4 is: {}", arr[4])
+
+print("")
+
+value = arr[length(arr) - 2]
+print("value is a new variable... arr: {}, value: {}", arr, value)
+
+print("")
+
+my_arr = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+part = my_arr[2:7]
+print("my_arr = {}", my_arr)
+print("Elements from index 2 to 6 [2:7] (like Python): {}", part) ; [2, 3, 4, 5, 6]
+
+print("")
+
+my_new_arr = ["apple", "banana", "cherry"]
+print("my_new_arr = {}", my_new_arr)
+print("Element 0 is: {}", my_new_arr[0])
+print("Element 1 is: {}", my_new_arr[1])
+print("Element 2 is: {}", my_new_arr[2])
+
+print("Length of my_new_arr is: {}", length(my_new_arr))
+
+print("")
+
+my_latest_arr = [0, 1, 2, 3, 4]
+print("my_latest_arr = {}", my_latest_arr)
+
+my_latest_arr[1] = 100
+print("updated my_latest_arr = {}", my_latest_arr)
+
+print("")
+
+my_nested_arr = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+print("my_nested_arr = {}", my_nested_arr)
+print("[0][1]: {}", my_nested_arr[0][1]) ; prints 2

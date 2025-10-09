@@ -1,0 +1,81 @@
+; AST Script: test_sort.ast
+; Implements a Recursive Insertion Sort algorithm to sort an array of Strings.
+; FIX APPLIED: Array assignment logic updated to ensure the mutated array is explicitly returned
+; and captured/passed down the call stack, addressing pass-by-value issues.
+; SYNTAX: No semicolons (;) or 'while' loops used.
+
+; Assumptions:
+; 1. In-place mutable array indexing (arr[index] = value) is supported
+; 2. A built-in length(array) function is supported
+; 3. Comparison operators (>) are supported for Strings
+
+; --- Function Definitions: Recursive Insertion Sort ---
+
+; Finds the correct spot for 'val' in the sorted sub-array arr[0...j].
+; Returns the mutated array on every path.
+fn insert_element(arr, val, j) [
+; Base Case 1: If 'j' drops below 0, the element 'val' belongs at index 0.
+if (j < 0) [
+arr[0] = val
+return arr
+]
+
+; Comparison: If the current element (arr[j]) is GREATER than the value to insert ('val').
+if (arr[j] > val) [
+; Shift arr[j] one position to the right to make space
+arr[j + 1] = arr[j]
+; Recurse and RETURN THE RESULT of the recursive call.
+return insert_element(arr, val, j - 1)
+] else [
+; Base Case 2: Found the correct spot. Place 'val' at the next position.
+arr[j + 1] = val
+return arr
+]
+
+]
+
+; Main function to iterate through the array and sort it recursively.
+fn recursive_sort(arr, i) [
+; Base case: Stop when the index 'i' reaches the length of the array and RETURN THE FINAL ARRAY.
+if (i >= length(arr)) [
+return arr
+]
+
+; 1. Get the current element and the insertion start index
+val = arr[i]
+j = i - 1
+
+; 2. Insert the current element 'val' into the sorted sub-array [0...i-1].
+; CRITICAL FIX: Capture the mutated array returned by insert_element
+arr = insert_element(arr, val, j)
+
+; 3. Recurse to the next element AND RETURN THE RESULT of that recursive call.
+return recursive_sort(arr, i + 1)
+
+]
+
+; --------------------------------------------------------------------------
+
+; --- Main Program Execution ---
+
+words = [
+"zebra",
+"apple",
+"grape",
+"mango",
+"kiwi",
+"peach",
+"lemon",
+"orange",
+"berry",
+"fig"
+]
+
+print("--- Unsorted List ---")
+print("{}", words)
+
+; Start the recursive sort from index 1 and capture the returned result.
+sorted_words = recursive_sort(words, 1)
+
+print("--- Sorted List ---")
+print("{}", sorted_words)
