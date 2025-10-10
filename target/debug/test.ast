@@ -26,7 +26,7 @@ fn returns_a_string() [
 ]
 
 a = add(177)					; first we call add and put the returned value in a
-print(a)						; then we print a
+print("Boo! {}\n", a)						; then we print a
 
 divide(10)						; then we call divide which prints the result directly
 mult(21, 2)						; same with mult

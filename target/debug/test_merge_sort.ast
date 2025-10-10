@@ -1,6 +1,6 @@
 ; Astra Script: Fully Recursive Merge Sort (Using Concatenation and Recursion)
 ; Define the array to be sorted
-data_array = ["cherry", "apple", "mango", "banana", "orange", "grape", "kiwi", "lemon"]
+data_array = ["no", "other", "language", "like", "a", "Astra"]
 
 ; --- Recursive Merge Helper Functions ---
 
