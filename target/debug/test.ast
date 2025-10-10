@@ -7,8 +7,8 @@
 
 fn add(number) [
 	result = (number + 500) * 5 				; creating the result
-	print("The answer is {}", result) 	; printing the result
-	return result						; returing the result
+	print("The answer is {}", result) 			; printing the result
+	return result								; returing the result
 ]
 
 fn divide(number) [
@@ -21,32 +21,53 @@ fn mult(number1, number2) [
 ]
 
 fn returns_a_string() [
-	my_string = "I work!"
+	my_string = "I'm coming from a function!"
 	return my_string
 ]
 
-a = add(177)					; first we call add and put the returned value in a
-print("Boo! {}\n", a)						; then we print a
+print("Now let's call add()...\n")
+a = add(177)									; first we call add and put the returned value in a
+print(a)										; then we print a
 
-divide(10)						; then we call divide which prints the result directly
-mult(21, 2)						; same with mult
+print("\n----------------------------------------\n")
 
-print(returns_a_string())		; then we call ret from within a print statement
+print("Now let's call divide() and mult()...\n")
+divide(10)										; then we call divide which prints the result directly
+mult(21, 2)										; same with mult
 
-b = 2							; declare b as the literal 2
-print(b)						; print the value of b
+print("\n----------------------------------------\n")
 
-print(d = 100 * (2 + 5) - 63)	; declare d, compute expression, print result
-print(d)						; prove that d is now declared
+print("Now let's call returns_a_string()...\n")
+print(returns_a_string())						; then we call ret from within a print statement
 
-; in your face, see if I'm not right!
+print("\n----------------------------------------\n")
+
+print("Now let's declare b as a literal...\n")
+b = 2											; declare b as the literal 2
+print(b)										; print the value of b
+
+print("\n----------------------------------------\n")
+
+print("Now let's declare d as an expression...\n")
+print(d = 100 * (2 + 5) - 63)					; declare d, compute expression, print result
+print(d)										; prove that d is now declared
+
+print("\n----------------------------------------\n")
+
+print("Now let's see if d is really a thing...\n")
 print("See? d is now a thing... d = {}", d)
 
+print("\n----------------------------------------\n")
+
+print("Testing equality and relational operators...\n")
 x = 10
 if (x == 10) [
 	print("x equals {}", x)
 ]
 
+print("\n----------------------------------------\n")
+
+print("Is y strictly equal to z?\n")
 y = 100
 z = 100.0
 if (y === z) [
@@ -55,10 +76,16 @@ if (y === z) [
 	print("y === z: This is what you should see because the test yields false (y = 100, z = 100.0)")
 ]
 
+print("\n----------------------------------------\n")
+
+print("Is y not strictly equal to z?\n")
 if (y !== z) [
 	print("y !== z: That's right, y does not strictly equal z.")
 ]
 
+print("\n----------------------------------------\n")
+
+print("Is 1 equal to 1?\n")
 if (1 == 1) [
 	print("1 equals 1")
 ] else [
@@ -67,15 +94,21 @@ if (1 == 1) [
 	]
 ]
 
+print("\n----------------------------------------\n")
+
+print("Is 1 strictly equal to 1.0?\n")
+print("Is dog < cat?")
 if ("dog" < "cat") [
 	print("yes")
 ] else [
 	print("no")
 ]
 
+print("\n----------------------------------------\n")
+
+print("Testing 'or' and '!=' operators...\n")
 x = 2
 y = 3
-print("")
 print("is x not 2 or y not 3?")
 if(x != 2 or y != 3) [
 	print("x is 2 or y is 2")
@@ -83,6 +116,9 @@ if(x != 2 or y != 3) [
 	print("neither condition is satisfied, x = {}, y = {}", x, y)
 ]
 
+print("\n----------------------------------------\n")
+
+print("Testing 'and' and 'not' operators...\n")
 var1 = true
 var2 = false
 
