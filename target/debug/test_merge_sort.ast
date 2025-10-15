@@ -1,6 +1,33 @@
 ; Astra Script: Fully Recursive Merge Sort (Using Concatenation and Recursion)
 ; Define the array to be sorted
-data_array = ["no", "other", "language", "like", "a", "Astra"]
+
+; data_array = ["no", "other", "language", "like", "a", "Astra"]
+
+data_array = ["the", "of", "to", "and", "a", "in", "is", "it", "you", "that", "he", "was", "for", "on", "are", 
+    "as", "with", "his", "they", "at", "be", "this", "have", "from", "or", "one", "had", "by", 
+    "word", "but", "what", "some", "we", "can", "out", "other", "were", "all", "there", "when", 
+    "up", "use", "your", "how", "said", "an", "each", "she", "which", "do", "their", "time", "if", 
+    "will", "way", "about", "many", "then", "them", "write", "would", "like", "so", "these", "her", 
+    "long", "make", "thing", "see", "him", "two", "has", "look", "more", "day", "could", "go", 
+    "come", "did", "my", "sound", "no", "most", "know", "water", "than", "call", "first", "who", 
+    "may", "down", "side", "been", "now", "find", "any", "new", "work", "part", "take", "get", 
+    "place", "year", "live", "me", "back", "give", "our", "under", "name", "very", "through", 
+    "just", "form", "sentence", "great", "think", "say", "help", "much", "before", "line", 
+    "right", "too", "mean", "old", "any", "same", "tell", "boy", "follow", "came", "want", "show", 
+    "also", "around", "form", "three", "small", "set", "put", "end", "does", "another", "well", 
+    "large", "must", "big", "even", "such", "because", "turn", "here", "why", "ask", "went", "men", 
+    "read", "need", "land", "different", "home", "us", "move", "try", "kind", "hand", "picture", 
+    "again", "change", "off", "play", "spell", "air", "away", "animal", "house", "point", "page", 
+    "letter", "mother", "answer", "found", "study", "still", "learn", "should", "world", 
+    "high", "every", "near", "add", "food", "between", "own", "below", "country", "plant", "last", 
+    "school", "father", "keep", "tree", "never", "start", "city", "earth", "eye", "light", 
+    "thought", "head", "under", "story", "saw", "left", "don't", "few", "while", "along", "might", 
+    "close", "something", "seem", "next", "hard", "open", "example", "begin", "life", "always", 
+    "those", "both", "paper", "together", "got", "group", "often", "run", "important", "until", 
+    "children", "side", "feet", "car", "mile", "night", "walk", "white", "sea", "began", "grow", 
+    "took", "river", "four", "carry", "state", "once", "book", "hear", "stop", "without", 
+    "second", "later", "miss", "idea", "enough", "eat", "face", "watch", "far", "really", 
+    "almost", "let", "above", "girl", "sometimes", "mountain", "cut", "young", "talk", "soon"]
 
 ; --- Recursive Merge Helper Functions ---
 
