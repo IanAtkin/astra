@@ -1,0 +1,13 @@
+; test script to test simple expressions
+
+; this is an insane function that just evaluates an expression and returns it
+fn calculate(expression) [
+	result = expression
+	return result
+]
+
+print("{}\n", calculate(10 + 5 - (4 * 2) / 8.5))
+
+print("{}\n", calculate(10^6))
+
+print("{}\n", calculate(143 % 3))
